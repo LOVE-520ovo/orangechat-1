@@ -118,6 +118,19 @@ class ProactiveMessageService : KoinComponent {
             } else {
                 Random.nextInt(minMinutes, maxMinutes + 1)
             }
+            // Heartbeat: record every scheduling decision so the table is never empty
+            if (kliDelay > 0L) {
+                val pending = KliWakeLogger.readPending(context)
+                if (pending != null) {
+                    CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            KliWakeLogger.logScheduled(context, setting, pending.cycleId, pending.lambda, pending.theta)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "heartbeat log failed", e)
+                        }
+                    }
+                }
+            }
             val triggerTime = java.lang.System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(delayMinutes.toLong())
 
             // 保存下次触发时间到SharedPreferences
@@ -168,8 +181,8 @@ class ProactiveMessageService : KoinComponent {
 
             Log.d(TAG, "Scheduled proactive message in $delayMinutes minutes, trigger at ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(triggerTime))}")
 
-            // Also schedule via WorkManager as a more reliable fallback
-            ProactiveMessageWorker.scheduleNext(context, setting)
+            // Watchdog: WorkManager periodically verifies the alarm still exists
+            ProactiveMessageWorker.ensureWatchdog(context, setting)
         }
 
         // ==================== Kli Wake ====================

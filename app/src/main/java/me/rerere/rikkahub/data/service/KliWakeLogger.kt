@@ -61,6 +61,35 @@ object KliWakeLogger {
         return m.groupValues.getOrNull(1)?.trim().orEmpty()
     }
 
+    suspend fun logScheduled(
+        context: Context,
+        setting: ProactiveMessageSetting,
+        cycleId: Long,
+        lambda: Double,
+        theta: Double,
+    ) {
+        val cfg = WakeLogConfig(setting.supabaseUrl, setting.supabaseKey)
+        if (cfg.supabaseUrl.isBlank() || cfg.serviceKey.isBlank()) {
+            Log.w(TAG, "heartbeat skipped: supabase not configured")
+            return
+        }
+        val entry = WakeLogEntry(
+            owner = setting.wakeLogOwner,
+            firedAtMs = System.currentTimeMillis(),
+            cycleId = cycleId,
+            lambda = lambda,
+            theta = theta,
+            hazardAtFire = 0.0,
+            drive = 0.0,
+            tone = 0.0,
+            drift = 0.0,
+            decision = "silent",
+            source = "scheduled",
+        )
+        val ok = WakeLogClient.insert(cfg, entry)
+        Log.d(TAG, "heartbeat logged=" + ok + " cycle=" + cycleId)
+    }
+
     suspend fun log(
         context: Context,
         setting: ProactiveMessageSetting,

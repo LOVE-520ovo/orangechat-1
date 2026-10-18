@@ -14,6 +14,7 @@ import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.Data
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.ExistingWorkPolicy
@@ -35,35 +36,21 @@ class ProactiveMessageWorker(
         private const val TAG = "ProactiveMessageWorker"
         private const val UNIQUE_WORK_NAME = "proactive_message_work"
 
-        fun scheduleNext(context: Context, setting: me.rerere.rikkahub.data.datastore.ProactiveMessageSetting) {
+        fun ensureWatchdog(context: Context, setting: me.rerere.rikkahub.data.datastore.ProactiveMessageSetting) {
             if (!setting.enabled) {
                 cancel(context)
                 return
             }
-
-            val minMinutes = setting.minIntervalMinutes.coerceAtLeast(1)
-            val maxMinutes = setting.maxIntervalMinutes.coerceAtLeast(minMinutes)
-            val delayMinutes = Random.nextInt(minMinutes, maxMinutes + 1)
-
-            val workRequest = OneTimeWorkRequestBuilder<ProactiveMessageWorker>()
-                .setInitialDelay(delayMinutes.toLong(), TimeUnit.MINUTES)
+            val workRequest = PeriodicWorkRequestBuilder<ProactiveMessageWorker>(1, TimeUnit.HOURS)
+                .setInitialDelay(1, TimeUnit.HOURS)
                 .build()
-
             WorkManager.getInstance(context)
-                .enqueueUniqueWork(
+                .enqueueUniquePeriodicWork(
                     UNIQUE_WORK_NAME,
-                    ExistingWorkPolicy.REPLACE,
+                    ExistingWorkPolicy.KEEP,
                     workRequest
                 )
-
-            // Also save trigger time to SharedPreferences for UI display
-            val triggerTime = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(delayMinutes.toLong())
-            context.getSharedPreferences("proactive_message_prefs", Context.MODE_PRIVATE)
-                .edit()
-                .putLong("next_trigger_time", triggerTime)
-                .apply()
-
-            Log.d(TAG, "Scheduled WorkManager proactive message in $delayMinutes minutes")
+            Log.d(TAG, "Watchdog ensured (1h periodic)")
         }
 
         fun cancel(context: Context) {
@@ -92,49 +79,27 @@ class ProactiveMessageWorker(
     }
 
     override suspend fun doWork(): Result {
-        Log.d(TAG, "ProactiveMessageWorker triggered")
-
+        Log.d(TAG, "Watchdog tick")
         val settingsStore = org.koin.core.context.GlobalContext.get().get<SettingsStore>()
         val settings = settingsStore.settingsFlow.first()
         val proactiveSetting = settings.proactiveMessageSetting
-
         if (!proactiveSetting.enabled) {
-            Log.d(TAG, "Proactive message disabled, skipping")
+            Log.d(TAG, "proactive message disabled, skipping watchdog")
             return Result.success()
         }
-
-        // Acquire a wake lock for the duration of the work
-        val powerManager = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
-        val wakeLock = powerManager.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            "ProactiveMessage::WorkerWakeLock"
-        )
-        wakeLock.acquire(5 * 60 * 1000L) // 5 minutes max
-
-        try {
-            // Delegate to the existing trigger service logic
-            // Start the foreground service which handles the actual AI generation
-            val serviceIntent = android.content.Intent(applicationContext, ProactiveMessageTriggerService::class.java)
-            
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                applicationContext.startForegroundService(serviceIntent)
-            } else {
-                applicationContext.startService(serviceIntent)
+        val prefs = applicationContext.getSharedPreferences("proactive_message_prefs", Context.MODE_PRIVATE)
+        val next = prefs.getLong("next_trigger_time", 0L)
+        val now = System.currentTimeMillis()
+        if (next <= 0L || next < now - 600000L) {
+            Log.w(TAG, "alarm missing or overdue, rescheduling")
+            try {
+                ProactiveMessageService.scheduleNext(applicationContext, proactiveSetting)
+            } catch (e: Exception) {
+                Log.e(TAG, "reschedule failed", e)
             }
-
-            // Schedule the next trigger via WorkManager
-            scheduleNext(applicationContext, proactiveSetting)
-
-            return Result.success()
-        } catch (e: Exception) {
-            Log.e(TAG, "ProactiveMessageWorker failed", e)
-            // Schedule next even on failure
-            scheduleNext(applicationContext, proactiveSetting)
-            return Result.retry()
-        } finally {
-            if (wakeLock.isHeld) {
-                wakeLock.release()
-            }
+        } else {
+            Log.d(TAG, "alarm healthy, next in " + ((next - now) / 60000L) + " min")
         }
+        return Result.success()
     }
 }
