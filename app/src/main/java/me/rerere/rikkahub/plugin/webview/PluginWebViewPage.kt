@@ -465,6 +465,11 @@ fun PluginWebViewPage(
                                 domStorageEnabled = true
                                 allowFileAccess = true
                                 allowContentAccess = true
+                                // plugin UI pages live on file:// and need to call Supabase directly
+                                @Suppress("DEPRECATION")
+                                allowFileAccessFromFileURLs = true
+                                @Suppress("DEPRECATION")
+                                allowUniversalAccessFromFileURLs = true
                                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                                 databaseEnabled = true
                             }
