@@ -18,6 +18,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.ExistingWorkPolicy
+import androidx.work.ExistingPeriodicWorkPolicy
 import kotlinx.coroutines.flow.first
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import java.util.concurrent.TimeUnit
@@ -47,7 +48,7 @@ class ProactiveMessageWorker(
             WorkManager.getInstance(context)
                 .enqueueUniquePeriodicWork(
                     UNIQUE_WORK_NAME,
-                    ExistingWorkPolicy.KEEP,
+                    ExistingPeriodicWorkPolicy.KEEP,
                     workRequest
                 )
             Log.d(TAG, "Watchdog ensured (1h periodic)")
