@@ -26,4 +26,26 @@ data class ProactiveMessageSetting(
     val aggressiveDebounceSeconds: Int = 30,
     // 悬浮球：主动消息到达时以 Telegram 风格悬浮球提醒，点击直接进入聊天页
     val floatingBubbleEnabled: Boolean = false,
+
+    // ==================== Kli Wake Activation ====================
+    // "kli" = 节律引擎；"random" = 旧的 30~90 分钟随机
+    val wakeMode: String = "kli",
+    // 活跃度总旋钮（次/小时）
+    val lambdaBase: Float = 0.70f,
+    // 允许醒来的星期：1=周一 … 7=周日
+    val wakeDays: String = "5,6,7",
+    // 半天日子的起始分钟（周五 17:30 = 1050），其他日子从 00:00 开始
+    val wakeHalfDayStartMinute: Int = 1050,
+    // 每日静默段：02:30 = 150，05:30 = 330
+    val quietStartMinute: Int = 150,
+    val quietEndMinute: Int = 330,
+    val quietLambda: Float = 0.05f,
+    // 醒来记录写到谁名下
+    val wakeLogOwner: String = "gabriel",
+    val supabaseUrl: String = "",
+    val supabaseKey: String = "",
+    // 刚说完话后强制沉默的分钟数
+    val wakeMinSpeakGapMinutes: Int = 20,
+    // 唤醒时是否携带 MCP 工具
+    val wakeMcpEnabled: Boolean = true,
 )
