@@ -274,6 +274,18 @@ class ProactiveMessageService : KoinComponent {
                 }
             }
 
+            KliWakeLogger.savePending(
+                context,
+                KliWakeLogger.Pending(
+                    cycleId = s.cycleId,
+                    lambda = KliWakeEngine.lambdaPerHour(s, cfg),
+                    theta = s.theta,
+                    drive = s.drive,
+                    tone = s.tone,
+                    drift = s.drift,
+                    hazard = s.hazard,
+                )
+            )
             prefs.edit()
                 .putString(
                     KEY_WAKE_STATE,
@@ -694,7 +706,8 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                 )
 
                 // 构建系统提示词（包含记忆 + 上下文，都放在最后面避免被网关淹没）
-                val systemPrompt = buildSystemPrompt(assistant, settings, idleMinutes, proactiveSetting.jumpIdleThresholdMinutes, isFromDeviceEvent, if (isFromDeviceEvent) deviceEventContext else contextStr)
+                val wakeHistory = KliWakeLogger.historyFor(applicationContext, proactiveSetting)
+                val systemPrompt = buildSystemPrompt(assistant, settings, idleMinutes, proactiveSetting.jumpIdleThresholdMinutes, isFromDeviceEvent, if (isFromDeviceEvent) deviceEventContext else contextStr, wakeHistory)
 
                 // user message 只放简短指令（上下文已在系统提示词中）
                 val userMessage = UIMessage(
@@ -814,6 +827,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                 Log.d(TAG, "Proactive message generated: '${replyText.take(100)}...' (${replyText.length} chars), hasToolCalls=$hasToolCalls, shouldJump=$shouldJump")
 
                 if (replyText.isBlank() || rawText.contains("[PASS]")) {
+                    KliWakeLogger.log(applicationContext, proactiveSetting, rawText, null, 0, "silent")
                     // AI 选择跳过，移除本次生成的 aiMessage node（基于 id 匹配，不误删历史）
                     Log.d(ProactiveMessageService.TAG, "AI chose to skip proactive message")
                     val aiId = aiMessage.id
@@ -831,6 +845,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                         chatService.saveConversation(conversationId, chatService.getConversationFlow(conversationId).value)
                     }
                 } else {
+                    KliWakeLogger.log(applicationContext, proactiveSetting, rawText, replyText, 0, "spoke")
                     // 有效回复：session 里已有 aiMessage（流式过程已追加），持久化并发通知
                     saveProactiveMessage(
                         settings, assistant, conversationId, conversation
@@ -971,7 +986,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
      * 构建系统提示词，包含记忆等内容
      * isFromDeviceEvent: 是否由激进模式设备事件触发
      */
-    private suspend fun buildSystemPrompt(assistant: Assistant, settings: Settings, idleMinutes: Int = 0, jumpThreshold: Int = 120, isFromDeviceEvent: Boolean = false, deviceEventContext: String? = null): String {
+    private suspend fun buildSystemPrompt(assistant: Assistant, settings: Settings, idleMinutes: Int = 0, jumpThreshold: Int = 120, isFromDeviceEvent: Boolean = false, deviceEventContext: String? = null, wakeHistory: String = ""): String {
         return buildString {
             // 基础系统提示词
             val effectiveSystemPrompt = if (assistant.allowConversationSystemPrompt) {
@@ -1031,6 +1046,10 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                     appendLine()
                     appendLine(deviceEventContext)
                 }
+            }
+            if (wakeHistory.isNotBlank()) {
+                appendLine()
+                appendLine(wakeHistory)
             }
         }
     }
