@@ -1,10 +1,8 @@
 name: Debug Build
-
 on:
   workflow_dispatch:
   push:
     branches: [ master, main ]
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -15,13 +13,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - name: Gradle cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ hashFiles("**/*.gradle*", "**/gradle-wrapper.properties") }}
       - name: Build debug
         run: |
           chmod +x gradlew
