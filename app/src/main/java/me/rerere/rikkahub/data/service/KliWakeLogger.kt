@@ -97,7 +97,7 @@ object KliWakeLogger {
     suspend fun historyFor(context: Context, setting: ProactiveMessageSetting): String = withContext(Dispatchers.IO) {
         if (setting.supabaseUrl.isBlank() || setting.supabaseKey.isBlank()) return@withContext ""
         val owner = URLEncoder.encode(setting.wakeLogOwner, "UTF-8")
-        val urlStr = setting.supabaseUrl.trimEnd(/) +
+        val urlStr = setting.supabaseUrl.trimEnd('/') +
             "/rest/v1/kli_wake_log?select=fired_at,decision,thought,reply_text&owner=eq." + owner +
             "&order=fired_at.desc&limit=3"
         var conn: HttpURLConnection? = null
