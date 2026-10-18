@@ -8,6 +8,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch submodule
+        run: |
+          git config --global url.https://github.com/.insteadOf git@github.com:
+          git submodule update --init material3/material-color-utilities
       - uses: pnpm/action-setup@v4
         with:
           version: 9
