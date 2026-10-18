@@ -166,7 +166,7 @@ object KliWakeLogger {
     private fun parseIso(s: String): Long {
         if (s.isBlank()) return 0L
         return runCatching {
-            val f = SimpleDateFormat("yyyy-MM-ddTHH:mm:ss.SSSZ", Locale.US)
+            val f = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
             f.timeZone = TimeZone.getTimeZone("UTC")
             f.parse(s)?.time ?: 0L
         }.getOrDefault(0L)
