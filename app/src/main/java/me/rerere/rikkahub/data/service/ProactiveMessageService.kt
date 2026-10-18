@@ -69,6 +69,10 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import me.rerere.rikkahub.CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID
 import me.rerere.rikkahub.data.datastore.ProactiveMessageSetting
+import me.rerere.rikkahub.data.wake.KliConfig
+import me.rerere.rikkahub.data.wake.KliWakeEngine
+import me.rerere.rikkahub.data.wake.SplitMix64
+import me.rerere.rikkahub.data.wake.WakeState
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findProvider
@@ -108,7 +112,12 @@ class ProactiveMessageService : KoinComponent {
 
             val minMinutes = setting.minIntervalMinutes.coerceAtLeast(1)
             val maxMinutes = setting.maxIntervalMinutes.coerceAtLeast(minMinutes)
-            val delayMinutes = Random.nextInt(minMinutes, maxMinutes + 1)
+            val kliDelay = if (setting.wakeMode == "kli") computeKliDelayMinutes(context, setting) else -1L
+            val delayMinutes: Int = if (kliDelay > 0L) {
+                if (kliDelay > Int.MAX_VALUE.toLong()) Int.MAX_VALUE else kliDelay.toInt()
+            } else {
+                Random.nextInt(minMinutes, maxMinutes + 1)
+            }
             val triggerTime = java.lang.System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(delayMinutes.toLong())
 
             // 保存下次触发时间到SharedPreferences
@@ -161,6 +170,120 @@ class ProactiveMessageService : KoinComponent {
 
             // Also schedule via WorkManager as a more reliable fallback
             ProactiveMessageWorker.scheduleNext(context, setting)
+        }
+
+        // ==================== Kli Wake ====================
+
+        private const val KEY_WAKE_STATE = "kli_wake_state"
+        private const val KEY_LAST_TICK = "kli_last_tick_ms"
+        private const val KEY_RNG_SEED = "kli_rng_seed"
+
+        private fun inQuiet(minuteOfDay: Double, start: Double, end: Double): Boolean =
+            if (start <= end) minuteOfDay >= start && minuteOfDay < end
+            else minuteOfDay >= start || minuteOfDay < end
+
+        private fun activeDays(setting: ProactiveMessageSetting): Set<Int> =
+            setting.wakeDays.split(",").mapNotNull { it.trim().toIntOrNull() }.toSet()
+
+        private fun isActiveAt(t: java.time.LocalDateTime, setting: ProactiveMessageSetting): Boolean {
+            val days = activeDays(setting)
+            val dow = t.dayOfWeek.value
+            if (dow !in days) return false
+            if (dow == 5 && t.hour * 60 + t.minute < setting.wakeHalfDayStartMinute) return false
+            return true
+        }
+
+        private fun minutesUntilActive(now: java.time.LocalDateTime, setting: ProactiveMessageSetting): Long {
+            if (isActiveAt(now, setting)) return 0L
+            var t = now
+            var acc = 0L
+            while (acc < 8 * 1440L) {
+                t = t.plusMinutes(15)
+                acc += 15
+                if (isActiveAt(t, setting)) return acc
+            }
+            return -1L
+        }
+
+        private fun minutesUntilInactive(now: java.time.LocalDateTime, setting: ProactiveMessageSetting): Long {
+            var t = now
+            var acc = 0L
+            while (acc < 8 * 1440L) {
+                t = t.plusMinutes(15)
+                acc += 15
+                if (!isActiveAt(t, setting)) return acc
+            }
+            return acc
+        }
+
+        private fun computeKliDelayMinutes(context: Context, setting: ProactiveMessageSetting): Long {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val now = java.time.LocalDateTime.now()
+            val nowMs = System.currentTimeMillis()
+            val cfg = KliConfig(lambdaBase = setting.lambdaBase.toDouble())
+
+            var s = WakeState()
+            val raw = prefs.getString(KEY_WAKE_STATE, null)
+            if (raw != null) {
+                val p = raw.split("|")
+                if (p.size == 6) {
+                    s = WakeState(
+                        drive = p[0].toDoubleOrNull() ?: 0.5,
+                        tone = p[1].toDoubleOrNull() ?: 0.5,
+                        drift = p[2].toDoubleOrNull() ?: 0.0,
+                        hazard = 0.0,
+                        theta = p[3].toDoubleOrNull() ?: 0.0,
+                        cycleId = p[4].toLongOrNull() ?: 0L,
+                        entropy = p[5].toLongOrNull() ?: 0L,
+                    )
+                }
+            }
+
+            var seed = prefs.getLong(KEY_RNG_SEED, nowMs)
+            val rng = SplitMix64(seed)
+
+            val lastTick = prefs.getLong(KEY_LAST_TICK, 0L)
+            if (lastTick > 0L && nowMs > lastTick) {
+                val deltaMin = (nowMs - lastTick) / 60000.0
+                s = KliWakeEngine.catchUp(s, deltaMin, cfg, rng)
+            }
+
+            s = KliWakeEngine.newCycle(rng.nextLong(), s)
+            seed = rng.nextLong()
+
+            val wait = minutesUntilActive(now, setting)
+            val delay: Long = if (wait != 0L) {
+                if (wait < 0L) 7L * 1440L else wait
+            } else {
+                val untilInactive = minutesUntilInactive(now, setting)
+                val nowMin = now.hour * 60.0 + now.minute
+                val m = KliWakeEngine.nextWakeInMinutes(
+                    s = s,
+                    cfg = cfg,
+                    nowMinuteOfDay = nowMin,
+                    isQuietAt = { mm ->
+                        inQuiet(mm, setting.quietStartMinute.toDouble(), setting.quietEndMinute.toDouble())
+                    },
+                    quietLambda = setting.quietLambda.toDouble(),
+                    activeUntilMinutes = untilInactive.toDouble(),
+                )
+                when {
+                    m < 0.0 -> untilInactive.coerceAtLeast(1L)
+                    m > untilInactive -> untilInactive.coerceAtLeast(1L)
+                    else -> m.toLong().coerceAtLeast(1L)
+                }
+            }
+
+            prefs.edit()
+                .putString(
+                    KEY_WAKE_STATE,
+                    listOf(s.drive, s.tone, s.drift, s.theta, s.cycleId, s.entropy).joinToString("|")
+                )
+                .putLong(KEY_RNG_SEED, seed)
+                .putLong(KEY_LAST_TICK, nowMs)
+                .apply()
+
+            return delay
         }
 
         fun getNextTriggerTime(context: Context): Long? {
